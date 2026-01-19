@@ -549,18 +549,31 @@ def main():
                 with example_cols[i]:
                     if st.button(f"Use: {example[:40]}...", key=f"example_{i}", use_container_width=True):
                         st.session_state.user_query = example
+                        st.session_state.query_input = example  # Sync with text area
                         st.rerun()
         
-        # Query input
+        # Query input - sync with session state
+        # Initialize query_input in session state if not exists
+        if "query_input" not in st.session_state:
+            st.session_state.query_input = st.session_state.get("user_query", "")
+        
+        # Update query_input when user_query changes (from example buttons)
+        if st.session_state.get("user_query", "") != st.session_state.get("query_input", ""):
+            st.session_state.query_input = st.session_state.get("user_query", "")
+        
         user_query = st.text_area(
             "Your Question",
-            value=st.session_state.get("user_query", ""),
+            value=st.session_state.get("query_input", ""),
             height=100,
             placeholder=f"e.g., 'Show me sales trends by region' for {selected_dataset}",
             help="Ask a question about the dataset. The AI will automatically select the right file and generate charts.",
             key="query_input",
             disabled=not (execution_ready and WORKFLOW_AVAILABLE and api_key)
         )
+        
+        # Sync user_query with query_input when user types
+        if user_query != st.session_state.get("user_query", ""):
+            st.session_state.user_query = user_query
         
         # Generate button
         if st.button("🚀 Generate Analysis", type="primary", use_container_width=True, disabled=not (execution_ready and WORKFLOW_AVAILABLE and api_key)):
@@ -659,6 +672,7 @@ def main():
                 with col2:
                     if st.button("Use", key=f"use_{i}"):
                         st.session_state.user_query = prompt
+                        st.session_state.query_input = prompt  # Sync with text area
                         st.rerun()
         else:
             st.info("No example prompts available for this dataset. Try asking your own question!")
