@@ -1,0 +1,26 @@
+[
+  {
+    "filename": "titanic.csv",
+    "file_path": "datasets/titanic.csv",
+    "description": "Titanic passenger survival dataset. Contains information about passengers including: PassengerId (integer), Survived (0 or 1), Pclass (1, 2, or 3), Name (string), Sex (male/female), Age (integer), SibSp (siblings/spouses aboard), Parch (parents/children aboard), Ticket (string), Fare (float), Cabin (string or null), Embarked (S/C/Q). Perfect for survival analysis, demographic analysis, and exploring relationships between passenger characteristics and survival rates.",
+    "summary": "Titanic passenger data for survival analysis"
+  },
+  {
+    "filename": "iris.csv",
+    "file_path": "datasets/iris.csv",
+    "description": "Iris flower classification dataset. Contains measurements of iris flowers: sepal_length (float), sepal_width (float), petal_length (float), petal_width (float), and species (setosa/versicolor/virginica). Ideal for classification analysis, feature comparisons, and visualizing relationships between flower measurements and species.",
+    "summary": "Iris flower measurements for classification analysis"
+  },
+  {
+    "filename": "sales_data.csv",
+    "file_path": "datasets/sales_data.csv",
+    "description": "Sales transaction data with time series information. Contains: date (YYYY-MM-DD), product_category (Electronics/Clothing/Food/Books/Toys), region (North/South/East/West), sales_amount (float), units_sold (integer), customer_id (string). Perfect for sales trend analysis, regional comparisons, product performance analysis, and time series visualizations.",
+    "summary": "Sales data with time series and regional breakdown"
+  },
+  {
+    "filename": "customer_data.csv",
+    "file_path": "datasets/customer_data.csv",
+    "description": "Customer demographics and purchase behavior dataset. Contains: customer_id (string), age (integer), gender (Male/Female/Other), location (city names), total_purchases (integer), average_order_value (float), last_purchase_date (date). Suitable for customer segmentation, demographic analysis, purchase behavior patterns, and location-based insights.",
+    "summary": "Customer analytics for segmentation and behavior analysis"
+  }
+]

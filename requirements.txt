@@ -1,0 +1,56 @@
+# Python Sandbox Chart Generator - Complete Requirements
+# Install with: pip install -r requirements.txt
+
+# ============================================================================
+# LangChain & LangGraph (for code generation with Google Gemini)
+# ============================================================================
+langchain>=0.1.0
+langchain-google-genai>=1.0.0
+langchain-core>=0.2.0
+langgraph>=0.1.0
+langchain-openai>=0.1.0  # Still needed for some legacy code
+
+# ============================================================================
+# Data Science & Analysis Libraries
+# ============================================================================
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scikit-learn>=1.3.0
+statsmodels>=0.14.0
+
+# ============================================================================
+# Jupyter & Notebook Execution
+# ============================================================================
+jupyter>=1.0.0
+nbconvert>=7.0.0
+jupytext>=1.15.0
+ipynb-py-convert>=0.1.0
+
+# ============================================================================
+# Code Execution & Docker
+# ============================================================================
+# Install codibox from local folder (if available) or from PyPI
+# Local installation: pip install -e ./codibox
+# PyPI installation: pip install codibox>=1.0.0
+codibox>=1.0.0  # Code execution package (supports Docker and Host backends)
+
+# ============================================================================
+# Utilities & Helpers
+# ============================================================================
+python-dotenv>=1.0.0
+xlsxwriter>=3.1.0
+tenacity>=8.2.0
+pydantic>=2.0.0
+
+# ============================================================================
+# Streamlit Dashboard
+# ============================================================================
+streamlit>=1.28.0
+
+# ============================================================================
+# Optional: For development and testing
+# ============================================================================
+# pytest>=7.4.0
+# ipython>=8.0.0

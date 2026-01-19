@@ -5,7 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+docs/
 # Distribution / packaging
 .Python
 build/
@@ -143,6 +143,13 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Streamlit secrets (keep example)
+.streamlit/secrets.toml
+
+# Datasets (user uploaded files - optional, uncomment if you don't want to track datasets)
+# datasets/*.csv
+# datasets/metadata.json
 
 # Spyder project settings
 .spyderproject

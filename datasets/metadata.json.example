@@ -1,0 +1,20 @@
+[
+  {
+    "filename": "sales_data.csv",
+    "file_path": "datasets/sales_data.csv",
+    "description": "Monthly sales data with product categories, regions, revenue, and time series information. Contains columns: date, product_category, region, sales_amount, units_sold, customer_id",
+    "summary": "Sales data with time series information for trend analysis and regional comparisons"
+  },
+  {
+    "filename": "customer_data.csv",
+    "file_path": "datasets/customer_data.csv",
+    "description": "Customer demographics and purchase history. Contains columns: customer_id, age, gender, location, total_purchases, average_order_value, last_purchase_date",
+    "summary": "Customer analytics dataset for segmentation and behavior analysis"
+  },
+  {
+    "filename": "product_data.csv",
+    "file_path": "datasets/product_data.csv",
+    "description": "Product catalog with pricing, inventory, and performance metrics. Contains columns: product_id, product_name, category, price, stock_quantity, sales_count, rating",
+    "summary": "Product information for inventory and performance analysis"
+  }
+]

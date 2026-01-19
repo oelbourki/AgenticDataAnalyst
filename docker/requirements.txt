@@ -1,0 +1,13 @@
+
+    pandas
+    numpy
+    matplotlib
+    seaborn
+    scikit-learn
+    statsmodels
+    jupyter
+    nbconvert
+    jupytext
+    ipynb-py-convert
+    xlsxwriter
+    
