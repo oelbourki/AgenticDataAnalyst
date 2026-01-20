@@ -7,9 +7,15 @@ import os
 # Try to import Gemini first, fallback to OpenAI for backward compatibility
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
+    try:
+        from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
+    except ImportError:
+        # Fallback: define the error class if import fails
+        ChatGoogleGenerativeAIError = Exception
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
+    ChatGoogleGenerativeAIError = Exception
     from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage
@@ -335,8 +341,42 @@ class ResultAdapter:
             """)
         ]
         
-        # Get response from the model
-        response = self.model.invoke(messages)
+        # Get response from the model with error handling
+        try:
+            response = self.model.invoke(messages)
+        except Exception as e:
+            # Handle rate limit and quota errors
+            error_str = str(e)
+            if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
+                # Extract retry delay if available
+                retry_delay = "50 seconds"
+                if "retry in" in error_str.lower():
+                    import re
+                    delay_match = re.search(r"retry in ([\d.]+)s", error_str, re.IGNORECASE)
+                    if delay_match:
+                        retry_delay = f"{delay_match.group(1)} seconds"
+                
+                # Raise a user-friendly error
+                raise ValueError(
+                    f"⚠️ **API Rate Limit Exceeded**\n\n"
+                    f"Your Gemini API quota has been exceeded. The free tier allows 20 requests per day per model.\n\n"
+                    f"**Solutions:**\n"
+                    f"1. Wait {retry_delay} before trying again\n"
+                    f"2. Check your quota and billing: https://ai.dev/rate-limit\n"
+                    f"3. Upgrade your API plan for higher limits\n"
+                    f"4. Try again later (quota resets daily)\n\n"
+                    f"**Error details:** {error_str[:200]}..."
+                )
+            elif "ChatGoogleGenerativeAIError" in str(type(e).__name__):
+                # Other Gemini API errors
+                raise ValueError(
+                    f"⚠️ **Gemini API Error**\n\n"
+                    f"An error occurred while calling the Gemini API:\n\n"
+                    f"**Error:** {error_str[:500]}"
+                )
+            else:
+                # Re-raise other errors as-is
+                raise
         
         # Extract the Python code from the response
         # This is a simplified approach - in a real system, you'd want more robust parsing

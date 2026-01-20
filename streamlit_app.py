@@ -5,6 +5,10 @@ AgenticDataAnalyst - AI-Powered Data Analysis Dashboard
 import streamlit as st
 import json
 import os
+import shutil
+import glob
+import re
+import base64
 from pathlib import Path
 import pandas as pd
 
@@ -88,6 +92,91 @@ def check_execution_backend():
             "ready": True,
             "status": f"ready (fallback from error: {str(e)})"
         }
+
+# Process markdown to ensure base64 images render properly in HTML
+def process_markdown_for_html(markdown_content: str):
+    """Process markdown content to ensure base64 images render properly in HTML."""
+    # Pattern to match base64 images in HTML img tags
+    # Handles: <img src='data:image/png;base64,...'> or <img src="data:image/png;base64,...">
+    # Also handles img tags with various attribute orders
+    base64_pattern = r"<img\s+([^>]*?)src=['\"]data:image/([^;]+);base64,([^'\">\s]+)['\"]([^>]*?)>"
+    
+    def enhance_image_tag(match):
+        """Enhance image tag for better HTML rendering in Streamlit."""
+        attrs_before = match.group(1) or ""
+        image_format = match.group(2).lower()
+        base64_data = match.group(3)
+        attrs_after = match.group(4) or ""
+        
+        # Check if style attribute already exists
+        has_style = 'style=' in attrs_before or 'style=' in attrs_after
+        
+        # Check if class attribute already exists
+        has_class = 'class=' in attrs_before or 'class=' in attrs_after
+        
+        # Build enhanced attributes
+        enhanced_attrs = []
+        
+        # Add style for proper rendering in Streamlit
+        if not has_style:
+            enhanced_attrs.append('style="max-width: 100%; height: auto; display: block; margin: 1em auto; border-radius: 4px;"')
+        
+        # Add class for responsive images
+        if not has_class:
+            enhanced_attrs.append('class="img-fluid"')
+        
+        # Combine all attributes
+        all_attrs = " ".join([attrs_before.strip(), *enhanced_attrs, attrs_after.strip()]).strip()
+        
+        # Reconstruct the img tag with proper formatting
+        return f'<img {all_attrs} src="data:image/{image_format};base64,{base64_data}">'
+    
+    # Replace all base64 image tags with enhanced versions
+    processed_content = re.sub(base64_pattern, enhance_image_tag, markdown_content, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Also wrap the content in a div with proper styling for better HTML rendering
+    # This ensures the HTML renders properly in Streamlit
+    if processed_content.strip():
+        # Don't double-wrap if already wrapped
+        if not processed_content.strip().startswith('<div'):
+            processed_content = f'<div style="line-height: 1.6;">{processed_content}</div>'
+    
+    return processed_content
+
+# Clean up old images and charts before new execution
+def cleanup_old_images():
+    """Delete old images and charts from temp directories before new execution."""
+    temp_dirs = [
+        "/tmp/temp_code_files",
+        "/tmp/downloads",  # CSV files directory
+    ]
+    
+    for temp_dir in temp_dirs:
+        if os.path.exists(temp_dir):
+            try:
+                # Delete all files in the directory
+                for file_path in glob.glob(os.path.join(temp_dir, "*")):
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        # Continue even if some files can't be deleted
+                        print(f"Warning: Could not delete {file_path}: {e}")
+                
+                # Also check for nested temp_code_files directory
+                nested_dir = os.path.join(temp_dir, "temp_code_files")
+                if os.path.exists(nested_dir):
+                    for file_path in glob.glob(os.path.join(nested_dir, "*")):
+                        try:
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        except Exception as e:
+                            print(f"Warning: Could not delete {file_path}: {e}")
+            except Exception as e:
+                # Don't fail if cleanup fails
+                print(f"Warning: Could not cleanup {temp_dir}: {e}")
 
 # Get API key from Streamlit secrets or environment
 def get_api_key():
@@ -184,24 +273,42 @@ Please generate a description and summary for this dataset."""
             HumanMessage(content=user_prompt)
         ]
         
-        response = model.invoke(messages)
-        content = response.content.strip()
-        
-        # Extract JSON from response
-        if "```json" in content:
-            json_start = content.find("```json") + 7
-            json_end = content.find("```", json_start)
-            content = content[json_start:json_end].strip()
-        elif "```" in content:
-            json_start = content.find("```") + 3
-            json_end = content.find("```", json_start)
-            content = content[json_start:json_end].strip()
-        
-        metadata = json.loads(content)
-        return metadata
+        try:
+            response = model.invoke(messages)
+            content = response.content.strip()
+            
+            # Extract JSON from response
+            if "```json" in content:
+                json_start = content.find("```json") + 7
+                json_end = content.find("```", json_start)
+                content = content[json_start:json_end].strip()
+            elif "```" in content:
+                json_start = content.find("```") + 3
+                json_end = content.find("```", json_start)
+                content = content[json_start:json_end].strip()
+            
+            metadata = json.loads(content)
+            return metadata
+        except Exception as invoke_error:
+            error_str = str(invoke_error)
+            # Check if it's a rate limit error
+            if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
+                st.warning("⚠️ API rate limit reached. Using basic dataset description. Try again later for AI-generated metadata.")
+            else:
+                st.warning(f"Could not generate AI metadata: {error_str[:100]}. Using basic description.")
+            # Fallback to basic description
+            return {
+                "description": f"Dataset with {len(df)} rows and {len(df.columns)} columns. Columns: {', '.join(df.columns[:5])}{'...' if len(df.columns) > 5 else ''}",
+                "summary": f"{filename} dataset with {len(df)} rows"
+            }
         
     except Exception as e:
-        st.warning(f"Could not generate AI metadata: {e}. Using basic description.")
+        error_str = str(e)
+        # Check if it's a rate limit error
+        if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
+            st.warning("⚠️ API rate limit reached. Using basic dataset description. Try again later for AI-generated metadata.")
+        else:
+            st.warning(f"Could not generate AI metadata: {error_str[:100]}. Using basic description.")
         # Fallback to basic description
         return {
             "description": f"Dataset with {len(df)} rows and {len(df.columns)} columns. Columns: {', '.join(df.columns[:5])}{'...' if len(df.columns) > 5 else ''}",
@@ -552,18 +659,14 @@ def main():
                         st.session_state.query_input = example  # Sync with text area
                         st.rerun()
         
-        # Query input - sync with session state
+        # Query input - use session state directly
         # Initialize query_input in session state if not exists
         if "query_input" not in st.session_state:
             st.session_state.query_input = st.session_state.get("user_query", "")
         
-        # Update query_input when user_query changes (from example buttons)
-        if st.session_state.get("user_query", "") != st.session_state.get("query_input", ""):
-            st.session_state.query_input = st.session_state.get("user_query", "")
-        
+        # Use session state directly without value parameter to avoid warning
         user_query = st.text_area(
             "Your Question",
-            value=st.session_state.get("query_input", ""),
             height=100,
             placeholder=f"e.g., 'Show me sales trends by region' for {selected_dataset}",
             help="Ask a question about the dataset. The AI will automatically select the right file and generate charts.",
@@ -571,13 +674,16 @@ def main():
             disabled=not (execution_ready and WORKFLOW_AVAILABLE and api_key)
         )
         
-        # Sync user_query with query_input when user types
-        if user_query != st.session_state.get("user_query", ""):
+        # Sync user_query with query_input when user types (only update, don't overwrite)
+        if user_query:
             st.session_state.user_query = user_query
         
         # Generate button
         if st.button("🚀 Generate Analysis", type="primary", use_container_width=True, disabled=not (execution_ready and WORKFLOW_AVAILABLE and api_key)):
-            if not user_query:
+            # Get the current query from the text area (not from session state to avoid stale data)
+            current_query = user_query.strip() if user_query else ""
+            
+            if not current_query:
                 st.warning("Please enter a question!")
             elif not api_key:
                 st.error("Please set your Google Gemini API key in the sidebar first!")
@@ -586,10 +692,16 @@ def main():
             elif not WORKFLOW_AVAILABLE:
                 st.error("Workflow not available. Please check the console for errors.")
             else:
+                # Update session state with the current query
+                st.session_state.user_query = current_query
+                
+                # Clean up old images and charts before new execution
+                cleanup_old_images()
+                
                 with st.spinner("🤖 AI is analyzing your data... This may take a minute..."):
                     try:
-                        # Process the query
-                        result = process_query(simple_coder, user_query)
+                        # Process the query - use the current query from text area
+                        result = process_query(simple_coder, current_query)
                         
                         # Display results
                         if result and "messages" in result:
@@ -639,7 +751,11 @@ def main():
                                     st.info("💡 Tip: Make sure code saves images to 'temp_code_files/' directory using plt.savefig()")
                                 
                                 if "markdown_content" in metadata_result:
-                                    st.markdown(metadata_result["markdown_content"], unsafe_allow_html=True)
+                                    # Process markdown to ensure base64 images render properly in HTML
+                                    markdown_content = metadata_result["markdown_content"]
+                                    markdown_content = process_markdown_for_html(markdown_content)
+                                    # Display markdown with HTML rendering (images will be inline)
+                                    st.markdown(markdown_content, unsafe_allow_html=True)
                                 
                                 # Show raw markdown if available
                                 if "markdown" in metadata_result:
@@ -656,9 +772,39 @@ def main():
                         else:
                             st.error("No results returned. Check the console for errors.")
                     
+                    except ValueError as e:
+                        # Handle rate limit and API errors (raised as ValueError from workflow)
+                        error_msg = str(e)
+                        if "Rate Limit" in error_msg or "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
+                            st.error("🚫 **API Rate Limit Exceeded**")
+                            st.markdown(error_msg)
+                            st.info("💡 **Tip:** The free tier allows 20 requests per day. Quota resets daily. Consider upgrading your plan for higher limits.")
+                        else:
+                            st.error("⚠️ **API Error**")
+                            st.markdown(error_msg)
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                        st.exception(e)
+                        error_str = str(e)
+                        # Check if it's a rate limit error even if not caught as ValueError
+                        if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
+                            st.error("🚫 **API Rate Limit Exceeded**")
+                            st.markdown(f"""
+                            ⚠️ **Your Gemini API quota has been exceeded.**
+                            
+                            The free tier allows **20 requests per day per model**.
+                            
+                            **Solutions:**
+                            1. Wait 50-60 seconds before trying again
+                            2. Check your quota: https://ai.dev/rate-limit
+                            3. Upgrade your API plan for higher limits
+                            4. Try again later (quota resets daily)
+                            """)
+                            with st.expander("🔍 Technical Details"):
+                                st.code(error_str[:500])
+                        else:
+                            st.error(f"❌ **Error occurred**")
+                            st.markdown(f"An unexpected error occurred while processing your query.")
+                            with st.expander("🔍 Error Details"):
+                                st.exception(e)
     
     with tab2:
         st.header("Example Prompts")

@@ -21,6 +21,16 @@
 - 🤖 **AI-Powered Metadata**: Generates dataset descriptions and summaries automatically
 - 🌐 **Multiple Interfaces**: CLI, Streamlit web app, and programmatic API
 
+## 📸 Demo
+
+### Main Interface
+![AgenticDataAnalyst Analysis Results](assets/msedge_I4NO2Ub53P.png)
+
+### Analysis Results
+![AgenticDataAnalyst Main Interface](assets/msedge_PeuJyv18yG.png)
+
+*Interactive web interface for natural language data analysis with AI-powered insights*
+
 ## Project Structure
 
 ```
@@ -52,6 +62,7 @@ AgenticDataAnalyst/
 ## 📋 Table of Contents
 
 - [Features](#-features)
+- [Demo](#-demo)
 - [Architecture](#-architecture)
 - [Quick Start](#-quick-start)
 - [Installation](#-installation)
@@ -300,10 +311,6 @@ GOOGLE_API_KEY = "your-api-key-here"
 - ✅ No additional configuration needed
 
 ## 🛠️ Development
-
-### Project Status
-
-✅ **Production Ready**: Fully functional and tested
 
 ### Current Features
 

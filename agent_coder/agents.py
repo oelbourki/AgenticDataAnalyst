@@ -2,9 +2,15 @@ from typing import Dict, List, Any, Optional, TypedDict, Tuple
 # Try to import Gemini first, fallback to OpenAI for backward compatibility
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
+    try:
+        from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
+    except ImportError:
+        # Fallback: define the error class if import fails
+        ChatGoogleGenerativeAIError = Exception
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
+    ChatGoogleGenerativeAIError = Exception
     from langchain_openai import ChatOpenAI
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
@@ -783,9 +789,38 @@ Example for "customer age distribution":
         print("state['messages']>>>>", state['messages'])
         print("-"*100)
         # response = self.completion_with_backoff(messages)
-        response = self.model.invoke(
-            state['messages'] + messages
-        )
+        try:
+            response = self.model.invoke(
+                state['messages'] + messages
+            )
+        except Exception as e:
+            # Handle rate limit and quota errors
+            error_str = str(e)
+            if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
+                retry_delay = "50 seconds"
+                if "retry in" in error_str.lower():
+                    import re
+                    delay_match = re.search(r"retry in ([\d.]+)s", error_str, re.IGNORECASE)
+                    if delay_match:
+                        retry_delay = f"{delay_match.group(1)} seconds"
+                raise ValueError(
+                    f"⚠️ **API Rate Limit Exceeded**\n\n"
+                    f"Your Gemini API quota has been exceeded. The free tier allows 20 requests per day per model.\n\n"
+                    f"**Solutions:**\n"
+                    f"1. Wait {retry_delay} before trying again\n"
+                    f"2. Check your quota and billing: https://ai.dev/rate-limit\n"
+                    f"3. Upgrade your API plan for higher limits\n"
+                    f"4. Try again later (quota resets daily)\n\n"
+                    f"**Error details:** {error_str[:200]}..."
+                )
+            elif "ChatGoogleGenerativeAIError" in str(type(e).__name__):
+                raise ValueError(
+                    f"⚠️ **Gemini API Error**\n\n"
+                    f"An error occurred while calling the Gemini API:\n\n"
+                    f"**Error:** {error_str[:500]}"
+                )
+            else:
+                raise
         content = response.content
         print("content planning>>>>", content)
         # messages = [
@@ -1062,9 +1097,30 @@ class CodeExecutor:
                 """)
             ]
             
-            # Get response from the model
-            response = self.model.invoke(messages)
-            refined_code = response.content.strip()
+            # Get response from the model with error handling
+            try:
+                response = self.model.invoke(messages)
+                refined_code = response.content.strip()
+            except Exception as e:
+                # Handle rate limit and quota errors
+                error_str = str(e)
+                if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
+                    retry_delay = "50 seconds"
+                    if "retry in" in error_str.lower():
+                        import re
+                        delay_match = re.search(r"retry in ([\d.]+)s", error_str, re.IGNORECASE)
+                        if delay_match:
+                            retry_delay = f"{delay_match.group(1)} seconds"
+                    print(f"⚠️ API Rate Limit Exceeded. Wait {retry_delay} before retrying.")
+                    # Return original code if refinement fails due to rate limit
+                    return code
+                elif "ChatGoogleGenerativeAIError" in str(type(e).__name__):
+                    print(f"⚠️ Gemini API Error during code refinement: {error_str[:200]}")
+                    # Return original code if refinement fails
+                    return code
+                else:
+                    # Re-raise other errors
+                    raise
             
             # Extract code from markdown if necessary
             import re
