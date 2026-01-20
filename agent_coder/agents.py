@@ -798,12 +798,24 @@ class CodeGenerationAgent:
         # Create messages for the model
         # print("file_info>>>>", file_info)
         
-        # Only include filename in prompt if it's valid
+        # Determine file instruction based on whether a file is provided
         file_instruction = ""
-        if filename and os.path.exists(file_path) if file_path else False:
-            file_instruction = f" using the file at '/home/sandboxuser/{filename}'."
+        if file_path and os.path.exists(file_path) and os.path.isfile(file_path):
+            # File is provided and exists - MUST use it
+            file_instruction = f"""
+            
+CRITICAL INSTRUCTIONS - DATASET PROVIDED:
+- A dataset file has been provided: '{file_path}' (filename: '{filename}')
+- You MUST use this exact dataset file - DO NOT generate fake or sample data
+- Load the dataset using: df = pd.read_csv('{filename}') or the exact file path provided
+- Use the actual columns and data from this file
+- The file information above contains details about the dataset structure
+- DO NOT create sample data - use the real dataset provided
+"""
+        elif filename and os.path.exists(file_path) if file_path else False:
+            file_instruction = f" using the file at '/home/sandboxuser/{filename}'. You MUST use this exact dataset - DO NOT generate fake data."
         elif filename:
-            file_instruction = f" Note: A file '{filename}' was mentioned but may not be available. Generate code that can work with sample data or handle missing files gracefully."
+            file_instruction = f" Note: A file '{filename}' was mentioned but may not be available. If the file exists, use it. Otherwise, generate code that can work with sample data or handle missing files gracefully."
         else:
             # Enhanced instruction for no-file scenario
             file_instruction = """
@@ -834,7 +846,9 @@ Example for "customer age distribution":
             Generate a plan to solve or perform the task (pay attention to data types and values when selecting the subset data) then write the code to answer this question.{file_instruction}
             
             Make sure to:
-            - Create sample data if no file is provided
+            - **If a dataset file is provided (file_path or filename), you MUST use that exact dataset - DO NOT generate fake data**
+            - **Only create sample data if NO file is provided**
+            - Use the actual columns and data from the provided dataset file
             - Use appropriate data types and realistic values
             - Display all visualizations inline in the Jupyter notebook using plt.show() - DO NOT save plots to files unless explicitly requested
             - Include clear titles, labels, and legends
