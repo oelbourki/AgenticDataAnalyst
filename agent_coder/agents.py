@@ -1,4 +1,5 @@
 from typing import Dict, List, Any, Optional, TypedDict, Tuple
+import re
 # Try to import Gemini first, fallback to OpenAI for backward compatibility
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -799,7 +800,6 @@ Example for "customer age distribution":
             if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
                 retry_delay = "50 seconds"
                 if "retry in" in error_str.lower():
-                    import re
                     delay_match = re.search(r"retry in ([\d.]+)s", error_str, re.IGNORECASE)
                     if delay_match:
                         retry_delay = f"{delay_match.group(1)} seconds"
@@ -1107,7 +1107,6 @@ class CodeExecutor:
                 if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str or "quota" in error_str.lower():
                     retry_delay = "50 seconds"
                     if "retry in" in error_str.lower():
-                        import re
                         delay_match = re.search(r"retry in ([\d.]+)s", error_str, re.IGNORECASE)
                         if delay_match:
                             retry_delay = f"{delay_match.group(1)} seconds"

@@ -4,6 +4,9 @@ from typing import Dict, Any, List, Tuple
 from .workflow import create_code_interpreter_graph
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 import os
+import re
+import base64
+from pathlib import Path
 # Try to import Gemini first, fallback to OpenAI for backward compatibility
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -105,7 +108,7 @@ def img_to_html(img_path):
       img_to_bytes(img_path)
     )
     return img_html
-import re
+
 # Find all markdown image references with pattern ![png](temp_code_files/filename.png)
 pattern = r'!\[png\]\(temp_code_files/([^)]+)\)'
 
@@ -122,10 +125,6 @@ def remove_code_blocks(markdown_text):
     # Pattern to match code blocks (both fenced and indented)
     code_block_pattern = r'```[\s\S]*?```|`[\s\S]*?`'
     return re.sub(code_block_pattern, '', markdown_text)
-import re
-import os
-import base64
-from pathlib import Path
 
 # Find all markdown image references with pattern ![png](temp_code_files/filename.png)
 pattern = r'!\[(.*?)\]\(temp_code_files/([^)]+)\)'
@@ -351,7 +350,6 @@ class ResultAdapter:
                 # Extract retry delay if available
                 retry_delay = "50 seconds"
                 if "retry in" in error_str.lower():
-                    import re
                     delay_match = re.search(r"retry in ([\d.]+)s", error_str, re.IGNORECASE)
                     if delay_match:
                         retry_delay = f"{delay_match.group(1)} seconds"
