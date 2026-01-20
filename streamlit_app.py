@@ -701,7 +701,8 @@ def main():
                 with st.spinner("🤖 AI is analyzing your data... This may take a minute..."):
                     try:
                         # Process the query - use the current query from text area
-                        result = process_query(simple_coder, current_query)
+                        # Pass selected_dataset as fallback if no match is found
+                        result = process_query(simple_coder, current_query, selected_dataset=selected_dataset)
                         
                         # Display results
                         if result and "messages" in result:

@@ -31,6 +31,7 @@ class AgentState(MessagesState, total=False):
     execution_result: str
     new_messages: List[BaseMessage]
     csv_file_list: List[str]
+    selected_dataset: str  # Dataset selected in Streamlit UI
     """`total=False` is PEP589 specs.
 
     documentation: https://typing.readthedocs.io/en/latest/spec/typeddict.html#totality
@@ -470,13 +471,21 @@ def create_simple_graph(name: str = "simple_workflow"):
     # Compile the graph
     return workflow.compile(name=name)
 
-def process_query(graph, user_query: str) -> Dict[str, Any]:
-    """Process a user query through the simple workflow."""
+def process_query(graph, user_query: str, selected_dataset: str = None) -> Dict[str, Any]:
+    """Process a user query through the simple workflow.
+    
+    Args:
+        graph: The workflow graph to execute
+        user_query: The user's query/question
+        selected_dataset: Optional dataset filename selected in Streamlit UI (used as fallback)
+    """
     
     # Initialize the state with the user query as a message
-    initial_state = AgentState(messages=[
-        HumanMessage(content=user_query)
-    ])
+    initial_state = AgentState(
+        messages=[HumanMessage(content=user_query)],
+        user_query=user_query,
+        selected_dataset=selected_dataset
+    )
     
     # Run the graph
     result = graph.invoke(initial_state)

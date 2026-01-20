@@ -66,6 +66,25 @@ class FileAccessAgent:
     """Agent responsible for reading files and providing context."""
     
     def __init__(self, model_name: str = "gemini-2.5-flash-lite"):
+        # Set metadata_path first, before any early returns
+        # Check for datasets folder first, then fallback to artifacts
+        if os.path.exists("datasets/metadata.json"):
+            self.metadata_path = "datasets/metadata.json"
+        elif os.path.exists("artifacts/file_metadata.json"):
+            self.metadata_path = "artifacts/file_metadata.json"
+        else:
+            self.metadata_path = "datasets/metadata.json"  # Default to datasets
+        
+        # Set system prompt and parser (used by all code paths)
+        self.system_prompt = """
+        You are a file access agent. Your job is to read files and provide their contents.
+        You have access to the host file system, but you can only read files, not write to them.
+        When asked about a file, read it and provide its contents in a structured format.
+        If the user doesn't specify a file directly, determine the most relevant file based on their query.
+        """
+        # Initialize the Pydantic output parser
+        self.parser = PydanticOutputParser(pydantic_object=QueryInfo)
+        
         # Try Gemini first (default)
         if GEMINI_AVAILABLE:
             api_key = os.getenv("GOOGLE_API_KEY")
@@ -80,6 +99,7 @@ class FileAccessAgent:
                     temperature=0.0,
                     google_api_key=api_key
                 )
+                print("current working directory", os.getcwd())
                 return
             else:
                 print("Warning: GOOGLE_API_KEY not found. Trying OpenAI fallback...")
@@ -98,23 +118,6 @@ class FileAccessAgent:
                 "Gemini is preferred. Install with: pip install langchain-google-genai"
             )
 
-        self.system_prompt = """
-        You are a file access agent. Your job is to read files and provide their contents.
-        You have access to the host file system, but you can only read files, not write to them.
-        When asked about a file, read it and provide its contents in a structured format.
-        If the user doesn't specify a file directly, determine the most relevant file based on their query.
-        """
-        # Check for datasets folder first, then fallback to artifacts
-        if os.path.exists("datasets/metadata.json"):
-            self.metadata_path = "datasets/metadata.json"
-        elif os.path.exists("artifacts/file_metadata.json"):
-            self.metadata_path = "artifacts/file_metadata.json"
-        else:
-            self.metadata_path = "datasets/metadata.json"  # Default to datasets
-        
-        # Initialize the Pydantic output parser
-        self.parser = PydanticOutputParser(pydantic_object=QueryInfo)
-        
         print("current working directory", os.getcwd())
     
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -123,9 +126,10 @@ class FileAccessAgent:
         # Extract the user query
         user_query = state.get("user_query", "")
         messages = state.get("messages", [])
+        selected_dataset = state.get("selected_dataset")  # Dataset selected in Streamlit UI
         
         # Determine which file to use based on the query and metadata
-        filename, file_info = self._determine_file(user_query, messages)
+        filename, file_info = self._determine_file(user_query, messages, selected_dataset)
         
         # Handle case where file_info is None
         if file_info is None:
@@ -187,8 +191,14 @@ class FileAccessAgent:
         }
     
     
-    def _determine_file(self, user_query: str, messages: List[BaseMessage]):
-        """Determine which file to use based on the user query and metadata."""
+    def _determine_file(self, user_query: str, messages: List[BaseMessage], selected_dataset: str = None):
+        """Determine which file to use based on the user query and metadata.
+        
+        Args:
+            user_query: The user's query/question
+            messages: Previous messages in the conversation
+            selected_dataset: Optional dataset filename selected in Streamlit UI (used as fallback)
+        """
         # Check if the user directly specified a file
         query_words = user_query.strip().split()
         for word in query_words:
@@ -332,6 +342,43 @@ class FileAccessAgent:
                     return embedding_match.get("file_path", ""), embedding_match
         except Exception as e:
             print(f"Error in embedding search: {str(e)}")
+        
+        # If no match found and selected_dataset is provided, use it as fallback
+        if selected_dataset:
+            print(f"No matching file found. Using selected dataset from Streamlit: {selected_dataset}")
+            try:
+                # Try to find the selected dataset in metadata
+                if os.path.exists(self.metadata_path):
+                    with open(self.metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    # Find the selected dataset in metadata
+                    for item in metadata:
+                        if item.get("filename") == selected_dataset or item.get("file_path", "").endswith(selected_dataset):
+                            file_path = item.get("file_path", "")
+                            # Resolve file path
+                            if file_path and not os.path.isabs(file_path):
+                                if os.path.exists(f"datasets/{file_path}"):
+                                    file_path = f"datasets/{file_path}"
+                                elif os.path.exists(f"datasets/{item.get('filename', '')}"):
+                                    file_path = f"datasets/{item.get('filename', '')}"
+                            
+                            if file_path and os.path.exists(file_path):
+                                print(f"Using selected dataset: {file_path}")
+                                return file_path, item
+                    
+                    # If not found in metadata, try direct path
+                    possible_paths = [
+                        f"datasets/{selected_dataset}",
+                        selected_dataset,
+                        f"datasets/{os.path.basename(selected_dataset)}"
+                    ]
+                    for path in possible_paths:
+                        if os.path.exists(path) and os.path.isfile(path):
+                            print(f"Using selected dataset (direct path): {path}")
+                            return path, {"filename": os.path.basename(path), "file_path": path}
+            except Exception as e:
+                print(f"Error using selected dataset fallback: {str(e)}")
         
         # Don't use query words as filenames - return empty and let the system handle it
         # The code generation agent can work without a specific file if needed
@@ -560,7 +607,6 @@ class FileAccessAgent:
                 response_content = response.content.strip()
                 
                 # Extract the JSON part if there's any extra text
-                import re
                 json_match = re.search(r'({.*})', response_content, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(1)
@@ -600,7 +646,9 @@ Your code will run in a secure Docker container with the following libraries ava
 Code Generation Guidelines
 
 1. Data Loading & Cleaning
-- Load the dataset from the provided filename into a pandas DataFrame.
+- **CRITICAL: If a dataset file is provided (filename or file_path), you MUST use that exact dataset. DO NOT generate fake or sample data.**
+- Load the dataset from the provided filename/file_path into a pandas DataFrame using the exact path provided.
+- **ONLY generate sample/fake data if NO file is provided AND the user explicitly asks for sample data.**
 - Inspect data types, missing values, and potential inconsistencies.
 - Apply necessary transformations such as:
   - Handling missing values
@@ -624,7 +672,12 @@ Code Generation Guidelines
   - Bar charts & pie charts – Comparisons between categories
 - Use seaborn and matplotlib for high-quality, well-annotated plots.
 - Ensure all visualizations include titles, axis labels, legends, and clear formatting.
-- always use the Description column to create the visualizations if it exists
+- **IMPORTANT: Display plots inline in Jupyter notebook**
+  • Use `plt.show()` or `display()` to display plots inline in the notebook
+  • DO NOT save plots to files using `plt.savefig()` unless explicitly requested by the user
+  • The code will be executed in a Jupyter notebook, and plots will be automatically captured in the notebook output
+  • Only save plots if the user specifically asks to save them to a file
+- Always use the Description column to create the visualizations if it exists
 
 3. Machine Learning & Predictive Modeling (if applicable)
 - Identify the correct ML approach for the task:
@@ -637,12 +690,15 @@ Code Generation Guidelines
 - Train a suitable model using scikit-learn or statsmodels.
 - Evaluate model performance with metrics like RMSE, accuracy, precision, recall, or R².
 - Visualize model results (e.g., residual plots, feature importance charts, confusion matrix).
+- **Display all model visualization plots inline using `plt.show()` - do not save to files unless explicitly requested**
 
 4. Code Quality & Documentation
 - Self-contained: The script must be executable without external dependencies.
 - Well-commented: Every step should have clear explanations.
 - Readable output: Use print() statements to summarize findings and model performance.
 - No external API calls or internet access: The code must work entirely within the given environment.
+- **Jupyter Notebook Execution**: The code will be converted to a Jupyter notebook and executed. All plots should be displayed inline using `plt.show()` so they appear in the notebook output cells.
+- **Dataset Usage**: When file information is provided, you MUST use the exact dataset file specified. Never generate fake or synthetic data when a real dataset is available.
 
 --------------------------------------------------
 
@@ -758,13 +814,13 @@ IMPORTANT: No specific data file was provided. You MUST:
 3. For "customer age distribution" - create a dataset with customer ages (e.g., 100-1000 customers with ages 18-80)
 4. Make the data realistic with appropriate distributions
 5. Include all necessary columns to answer the question
-6. Save visualizations to 'temp_code_files/' directory with descriptive filenames
-7. Use plt.savefig('temp_code_files/[descriptive_name].png') before plt.show()
+6. Display visualizations inline in the Jupyter notebook using plt.show() - DO NOT save to files
+7. The code will be executed in a Jupyter notebook, and plots will be automatically captured in the output
 
 Example for "customer age distribution":
 - Create a pandas DataFrame with 'age' column
 - Generate realistic age data (e.g., normal distribution around age 35-45)
-- Create a histogram showing the distribution
+- Create a histogram showing the distribution using plt.show() to display it inline
 - Include summary statistics
 """
         
@@ -780,9 +836,10 @@ Example for "customer age distribution":
             Make sure to:
             - Create sample data if no file is provided
             - Use appropriate data types and realistic values
-            - Save all visualizations to 'temp_code_files/' directory
+            - Display all visualizations inline in the Jupyter notebook using plt.show() - DO NOT save plots to files unless explicitly requested
             - Include clear titles, labels, and legends
             - Print summary statistics and insights
+            - Remember: The code will be executed in a Jupyter notebook, and plots will be automatically captured in the notebook output
             """)
         ]
         print("System message>>>>", messages[0].content)
@@ -841,7 +898,6 @@ Example for "customer age distribution":
         # content = response.content
         
         # Simple code extraction - look for Python code blocks
-        import re
         code_blocks = re.findall(r'```python(.*?)```', content, re.DOTALL)
         
         if code_blocks:
@@ -1122,7 +1178,6 @@ class CodeExecutor:
                     raise
             
             # Extract code from markdown if necessary
-            import re
             code_blocks = re.findall(r'```python(.*?)```', refined_code, re.DOTALL)
             if code_blocks:
                 refined_code = code_blocks[0].strip()
