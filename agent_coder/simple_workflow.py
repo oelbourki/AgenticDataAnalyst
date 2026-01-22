@@ -1,12 +1,27 @@
-from langgraph.graph import StateGraph, END
-from langgraph.graph import MessagesState
-from typing import Dict, Any, List, Tuple
-from .workflow import create_code_interpreter_graph
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+"""
+Simple workflow for code interpretation with result processing.
+"""
+
+# Standard library imports
 import os
 import re
+import glob
 import base64
 from pathlib import Path
+from typing import Dict, Any, List, Tuple
+
+# Third-party imports
+from dotenv import load_dotenv
+
+# LangGraph imports
+from langgraph.graph import StateGraph, END, MessagesState
+from langgraph.checkpoint.memory import MemorySaver
+
+# LangChain core imports
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
+
 # Try to import Gemini first, fallback to OpenAI for backward compatibility
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -20,10 +35,12 @@ except ImportError:
     GEMINI_AVAILABLE = False
     ChatGoogleGenerativeAIError = Exception
     from langchain_openai import ChatOpenAI
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
-from langgraph.checkpoint.memory import MemorySaver
+
+# Local imports
+from .workflow import create_code_interpreter_graph
+
+# Load environment variables
+load_dotenv()
 # from core import get_model, settings  # Commented out - module not found
 class AgentState(MessagesState, total=False):
     user_query: str
@@ -37,18 +54,6 @@ class AgentState(MessagesState, total=False):
     documentation: https://typing.readthedocs.io/en/latest/spec/typeddict.html#totality
     """
 
-# def wrap_model(model: BaseChatModel, instructions: str) -> RunnableSerializable[AgentState, AIMessage]:
-#     # model = model.bind_tools(tools)
-#     preprocessor = RunnableLambda(
-#         lambda state: [SystemMessage(content=instructions)] + state["messages"],
-#         name="StateModifier",
-#     )
-#     return preprocessor | model
-
-# def call_model(state: AgentState, config: RunnableConfig) -> AgentState:
-#     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
-#     model_runnable = wrap_model(m)
-#     response = model_runnable.invoke(state, config)
 class QueryProcessor:
     """A node that processes the initial user query before passing it to the code interpreter."""
     
@@ -57,7 +62,6 @@ class QueryProcessor:
         
     def __call__(self, state: AgentState) -> AgentState:
         """Process the user query and prepare it for the code interpreter."""
-        # print("QueryProcessor", state)
         # Get the last user message
         last_message = state["messages"][-1]
         user_query = last_message.content
@@ -76,7 +80,6 @@ class StateAdapter:
     
     def __call__(self, state: AgentState) -> Dict[str, Any]:
         """Transform MessagesState to code_interpreter input format."""
-        # print("StateAdapter", state)
         # Extract the user query from the messages
         user_messages = [msg for msg in state["messages"] if isinstance(msg, HumanMessage)]
         
@@ -89,16 +92,21 @@ class StateAdapter:
         # Create a filtered list with only HumanMessage and AIMessage in same order
         new_messages = [msg for msg in state["messages"] if isinstance(msg, HumanMessage) or isinstance(msg, AIMessage)]
         
+        # Get selected_dataset from state if available
+        selected_dataset = state.get("selected_dataset")
+        
         # Return the state in the format expected by code_interpreter
-        return {
+        result = {
             "user_query": user_query,
             "new_messages": new_messages
         }
-import base64
-from pathlib import Path
-# from utilities import load_bootstrap
-
-# load_bootstrap()
+        
+        # Include selected_dataset if it exists
+        if selected_dataset:
+            result["selected_dataset"] = selected_dataset
+        
+        return result
+# Image processing utilities
 
 def img_to_bytes(img_path):
     img_bytes = Path(img_path).read_bytes()
@@ -110,17 +118,6 @@ def img_to_html(img_path):
     )
     return img_html
 
-# Find all markdown image references with pattern ![png](temp_code_files/filename.png)
-pattern = r'!\[png\]\(temp_code_files/([^)]+)\)'
-
-# Replace each match with the HTML version using img_to_html
-def replace_with_html(match):
-    filename = match.group(1)
-    try:
-        result = img_to_html(f'/tmp/temp_code_files/{filename}')
-    except Exception as e:
-        result = img_to_html(f'/tmp/temp_code_files/temp_code_files/{filename}')
-    return result
 def remove_code_blocks(markdown_text):
     """Remove code blocks from markdown text."""
     # Pattern to match code blocks (both fenced and indented)
@@ -168,7 +165,6 @@ def replace_with_html(match):
     if os.path.exists(temp_dir):
         try:
             # Look for any PNG files
-            import glob
             image_files = glob.glob(f'{temp_dir}/*.png') + glob.glob(f'{temp_dir}/temp_code_files/*.png')
             if image_files:
                 # Use the most recently modified image
@@ -218,10 +214,7 @@ class ResultAdapter:
     """Adapter node that transforms code_interpreter results back to MessagesState."""
     
     def __init__(self):
-        import os
-        from dotenv import load_dotenv
-        load_dotenv()
-        
+        """Initialize ResultAdapter with LLM model."""
         # Try Gemini first (default)
         if GEMINI_AVAILABLE:
             api_key = os.getenv("GOOGLE_API_KEY")
@@ -299,7 +292,6 @@ class ResultAdapter:
             )
     def __call__(self, state: AgentState) -> AgentState:
         """Transform code_interpreter result to MessagesState format."""
-        # print("ResultAdapter", state)
         # Extract the result from the code interpreter
         # Assuming the code interpreter returns a result field or similar
         # Adjust this based on the actual structure of the code interpreter's output
@@ -316,19 +308,6 @@ class ResultAdapter:
         if execution_images:
             print(f"Found {len(execution_images)} images from execution: {execution_images}")
         
-        print("result_contentX>>>\n\n", result_contentX[:200] if len(result_contentX) > 200 else result_contentX)
-        print("\n\n")
-        # markdown = re.sub(pattern, replace_with_html, result_content)
-        # Remove code blocks from markdown to make the output cleaner
-
-        
-        # Clean up the markdown by removing code blocks if needed
-        # Only apply this if we want to hide code in the output
-        # markdown = remove_code_blocks(markdown)
-        
-        # You can uncomment the line above to remove code blocks
-        # or add a condition to selectively remove them based on state
-        # markdown = remove_code_blocks(markdown)
         user_query = state.get("user_query", "")
         messages = [
             SystemMessage(content=self.system_prompt),
@@ -493,10 +472,5 @@ def process_query(graph, user_query: str, selected_dataset: str = None) -> Dict[
     return result
 
 # Create the graph
-simple_coder = create_simple_graph(name="simple_coder") 
-
-# # Process a user query
-# user_query = "What is the distribution of accident counts? Is it normally distributed or skewed?"
-# result = process_query(simple_graph, user_query)
-# print(result)
+simple_coder = create_simple_graph(name="simple_coder")
 

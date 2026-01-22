@@ -1,5 +1,13 @@
-from .workflow import create_code_interpreter_graph, process_user_query
+"""
+CLI entry point for the agent coder.
+"""
+
+# Standard library imports
 import os
+
+# Local imports
+from .workflow import create_code_interpreter_graph, process_user_query
+
 
 def main():
     """Main application entry point."""

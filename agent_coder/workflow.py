@@ -1,11 +1,21 @@
-from langgraph.graph import StateGraph, END
-from langgraph.graph import MessagesState
+"""
+LangGraph workflow definitions for code interpretation.
+"""
+
+# Standard library imports
 from typing import Dict, Any, List, Tuple
-from .agents import FileAccessAgent, CodeGenerationAgent, CodeExecutor
+
+# LangGraph imports
+from langgraph.graph import StateGraph, END, MessagesState
+
+# LangChain core imports
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
 from langchain_core.messages import AIMessage, SystemMessage
-# from core import get_model, settings  # Commented out - module not found
+from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
+
+# Local imports
+from .agents import FileAccessAgent, CodeGenerationAgent, CodeExecutor
+
 
 class AgentState(MessagesState, total=False):
     user_query: str
@@ -21,6 +31,7 @@ class AgentState(MessagesState, total=False):
     df_description: str
     csv_file_list: List[str]
     images: List[str]  # Add images to state
+    selected_dataset: str  # Dataset selected in Streamlit UI
     """`total=False` is PEP589 specs.
     
     documentation: https://typing.readthedocs.io/en/latest/spec/typeddict.html#totality
@@ -34,10 +45,7 @@ def wrap_model(model: BaseChatModel, instructions: str) -> RunnableSerializable[
     )
     return preprocessor | model
 
-# def call_model(state: AgentState, config: RunnableConfig) -> AgentState:
-#     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
-#     model_runnable = wrap_model(m)
-#     response = model_runnable.invoke(state, config)
+
 def create_code_interpreter_graph(name: str = "code_interpreter"):
     """Create a LangGraph workflow for the code interpreter."""
     

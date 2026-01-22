@@ -1,5 +1,39 @@
-from typing import Dict, List, Any, Optional, TypedDict, Tuple
+"""
+Agent classes for file access, code generation, and code execution.
+"""
+
+# Standard library imports
+import os
 import re
+import json
+import subprocess
+import concurrent.futures
+from pathlib import Path
+from typing import Dict, List, Any, Optional, TypedDict, Tuple
+
+# Third-party imports
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_random_exponential,
+)
+
+# LangChain core imports
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+
+# Try to import LangChain output parsers (modern first, fallback to legacy)
+try:
+    from langchain_core.output_parsers import PydanticOutputParser
+    from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+except ImportError:
+    # Fallback for older LangChain versions
+    from langchain.output_parsers import PydanticOutputParser
+    from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+
 # Try to import Gemini first, fallback to OpenAI for backward compatibility
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -14,8 +48,6 @@ except ImportError:
     ChatGoogleGenerativeAIError = Exception
     from langchain_openai import ChatOpenAI
 
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
-
 # Try to import embedding models for semantic file search
 EMBEDDINGS_AVAILABLE = False
 OPENAI_EMBEDDINGS_AVAILABLE = False
@@ -29,30 +61,19 @@ except ImportError:
         OPENAI_EMBEDDINGS_AVAILABLE = True
     except ImportError:
         pass
-# Try modern import first, fallback to legacy import
+
+# Try to import sklearn for cosine similarity (optional)
 try:
-    from langchain_core.output_parsers import PydanticOutputParser
-    from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+    from sklearn.metrics.pairwise import cosine_similarity
+    SKLEARN_AVAILABLE = True
 except ImportError:
-    # Fallback for older LangChain versions
-    from langchain.output_parsers import PydanticOutputParser
-    from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
-import subprocess
-import os
-import json
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-)  # for exponential backoff
-from pydantic import BaseModel, Field
+    SKLEARN_AVAILABLE = False
+
+# Local imports
 from .utils import generate_detailed_dataframe_description, analyze_csv, json_to_text
-from dotenv import load_dotenv
-import os
+
+# Load environment variables
 load_dotenv()
-import pandas as pd
-import numpy as np
-import concurrent.futures
 
 class QueryInfo(BaseModel):
     """Information extracted from a user query."""
@@ -149,18 +170,32 @@ class FileAccessAgent:
                 
                 print(f"Cleaning sandbox and copying file to Docker container: {filename}")
                 # First delete everything in the sandbox
-                subprocess.run([
-                    "docker", "exec",
-                    "sandbox",
-                    "sh", "-c", "rm -rf /home/sandboxuser/*"
-                ])
-                # Copy the file to the Docker container
-                subprocess.run([
-                    "docker", "cp", 
-                    filename, 
-                    f"sandbox:/home/sandboxuser/{os.path.basename(filename)}"
-                ])
-                print(f"File copied to Docker container: {filename}")
+                # Note: Docker operations are deprecated - codibox handles this now
+                # Keeping for backward compatibility but these may fail if Docker not available
+                try:
+                    cleanup_result = subprocess.run(
+                        ["docker", "exec", "sandbox", "sh", "-c", "rm -rf /tmp/*"],
+                        capture_output=True,
+                        timeout=30,
+                        check=False
+                    )
+                    if cleanup_result.returncode != 0:
+                        print(f"Warning: Docker cleanup failed (non-critical): {cleanup_result.stderr.decode()}")
+                    
+                    # Copy the file to the Docker container
+                    copy_result = subprocess.run(
+                        ["docker", "cp", filename, f"sandbox:/tmp/{os.path.basename(filename)}"],
+                        capture_output=True,
+                        timeout=30,
+                        check=False
+                    )
+                    if copy_result.returncode == 0:
+                        print(f"File copied to Docker container: {filename}")
+                    else:
+                        print(f"Warning: Docker copy failed (non-critical): {copy_result.stderr.decode()}")
+                except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                    # Docker not available or command timed out - this is OK, codibox will handle it
+                    print(f"Info: Docker operations skipped (codibox will handle file transfer): {str(e)}")
                 # Preview the first few lines
                 preview = "\n".join(file_content.split("\n")[:10])
                 # file_info = f"File '{filename}' has been read and copied to the sandbox. Preview:\n{preview}"
@@ -191,21 +226,99 @@ class FileAccessAgent:
         }
     
     
-    def _determine_file(self, user_query: str, messages: List[BaseMessage], selected_dataset: str = None):
+    def _determine_file(
+        self, 
+        user_query: str, 
+        messages: List[BaseMessage], 
+        selected_dataset: Optional[str] = None
+    ) -> Tuple[str, Dict[str, Any]]:
         """Determine which file to use based on the user query and metadata.
         
         Args:
             user_query: The user's query/question
             messages: Previous messages in the conversation
-            selected_dataset: Optional dataset filename selected in Streamlit UI (used as fallback)
+            selected_dataset: Dataset filename selected in Streamlit UI (used by default unless user specifies otherwise)
         """
-        # Check if the user directly specified a file
+        # First, check if the user explicitly specified a different file in the query
         query_words = user_query.strip().split()
-        for word in query_words:
-            if os.path.exists(word):
-                return word, {"file_path": word, "filename": os.path.basename(word)}
+        explicit_file_mentioned = False
+        explicit_file_path = None
         
-        # If no direct file reference, use metadata to find the most relevant file
+        for word in query_words:
+            if os.path.exists(word) and os.path.isfile(word):
+                explicit_file_mentioned = True
+                explicit_file_path = word
+                break
+        
+        # If user explicitly mentioned a file, use it
+        if explicit_file_mentioned and explicit_file_path:
+            print(f"User explicitly specified file: {explicit_file_path}")
+            return explicit_file_path, {"file_path": explicit_file_path, "filename": os.path.basename(explicit_file_path)}
+        
+        # If selected_dataset is provided, use it by default (unless user explicitly mentioned another file)
+        if selected_dataset:
+            print(f"Using selected dataset from Streamlit UI: {selected_dataset}")
+            try:
+                # Try to find the selected dataset in metadata
+                if os.path.exists(self.metadata_path):
+                    with open(self.metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    # Find the selected dataset in metadata
+                    for item in metadata:
+                        # Match by filename (exact match or basename match)
+                        item_filename = item.get("filename", "")
+                        if item_filename == selected_dataset or item_filename == os.path.basename(selected_dataset):
+                            file_path = item.get("file_path", "")
+                            # Resolve file path - try multiple locations
+                            if file_path and not os.path.isabs(file_path):
+                                if os.path.exists(f"datasets/{file_path}"):
+                                    file_path = f"datasets/{file_path}"
+                                elif os.path.exists(f"datasets/{item.get('filename', '')}"):
+                                    file_path = f"datasets/{item.get('filename', '')}"
+                                elif os.path.exists(file_path):
+                                    pass  # Path is already correct
+                            
+                            # Also check if file_path ends with the selected_dataset
+                            if not file_path or not os.path.exists(file_path):
+                                if item.get("file_path", "").endswith(selected_dataset) or item.get("file_path", "").endswith(os.path.basename(selected_dataset)):
+                                    file_path = item.get("file_path", "")
+                                    if not os.path.isabs(file_path):
+                                        if os.path.exists(f"datasets/{file_path}"):
+                                            file_path = f"datasets/{file_path}"
+                            
+                            if file_path and os.path.exists(file_path) and os.path.isfile(file_path):
+                                print(f"✅ Using selected dataset from metadata: {file_path}")
+                                return file_path, item
+                            else:
+                                print(f"⚠️  Found metadata entry for {selected_dataset} but file not found at: {file_path}")
+                
+                # If not found in metadata, try direct path resolution
+                possible_paths = [
+                    f"datasets/{selected_dataset}",
+                    selected_dataset,
+                    f"datasets/{os.path.basename(selected_dataset)}"
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path) and os.path.isfile(path):
+                        print(f"✅ Using selected dataset (direct path): {path}")
+                        # Try to get metadata for this file
+                        if os.path.exists(self.metadata_path):
+                            with open(self.metadata_path, 'r') as f:
+                                metadata = json.load(f)
+                            for item in metadata:
+                                if item.get("filename") == os.path.basename(path) or item.get("file_path", "").endswith(os.path.basename(path)):
+                                    return path, item
+                        return path, {"filename": os.path.basename(path), "file_path": path}
+                
+                print(f"⚠️  Selected dataset '{selected_dataset}' not found. Will fall back to intelligent file selection.")
+            except Exception as e:
+                print(f"❌ Error using selected dataset: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                # Continue to fallback logic below
+        
+        # If no selected_dataset or it wasn't found, use metadata to find the most relevant file
         try:
             print("metadata_path", self.metadata_path)
             if os.path.exists(self.metadata_path):
@@ -246,20 +359,17 @@ class FileAccessAgent:
                 
                 # Prepare batch of messages for evaluation
                 batch_messages = []
+                
+                # Define FileRelevance model (moved outside loop for efficiency)
+                class FileRelevance(BaseModel):
+                    score: float = Field(..., description="A number from 0 to 10 indicating relevance (10 being perfect match)")
+                    certain: bool = Field(..., description="Whether you're certain this is the correct file")
+                    reason: str = Field(..., description="A brief explanation of your reasoning")
+                
+                # Create parser once (outside loop)
+                parser = PydanticOutputParser(pydantic_object=FileRelevance)
+                
                 for file_info in important_info:
-                    from pydantic import BaseModel, Field
-                    
-                    class FileRelevance(BaseModel):
-                        score: float = Field(..., description="A number from 0 to 10 indicating relevance (10 being perfect match)")
-                        certain: bool = Field(..., description="Whether you're certain this is the correct file")
-                        reason: str = Field(..., description="A brief explanation of your reasoning")
-                    
-                    # Use the same import as at the top of the file
-                    try:
-                        from langchain_core.output_parsers import PydanticOutputParser
-                    except ImportError:
-                        from langchain.output_parsers import PydanticOutputParser
-                    parser = PydanticOutputParser(pydantic_object=FileRelevance)
                     
                     messagesx = messages + [
                         SystemMessage(content=f"""
@@ -343,43 +453,6 @@ class FileAccessAgent:
         except Exception as e:
             print(f"Error in embedding search: {str(e)}")
         
-        # If no match found and selected_dataset is provided, use it as fallback
-        if selected_dataset:
-            print(f"No matching file found. Using selected dataset from Streamlit: {selected_dataset}")
-            try:
-                # Try to find the selected dataset in metadata
-                if os.path.exists(self.metadata_path):
-                    with open(self.metadata_path, 'r') as f:
-                        metadata = json.load(f)
-                    
-                    # Find the selected dataset in metadata
-                    for item in metadata:
-                        if item.get("filename") == selected_dataset or item.get("file_path", "").endswith(selected_dataset):
-                            file_path = item.get("file_path", "")
-                            # Resolve file path
-                            if file_path and not os.path.isabs(file_path):
-                                if os.path.exists(f"datasets/{file_path}"):
-                                    file_path = f"datasets/{file_path}"
-                                elif os.path.exists(f"datasets/{item.get('filename', '')}"):
-                                    file_path = f"datasets/{item.get('filename', '')}"
-                            
-                            if file_path and os.path.exists(file_path):
-                                print(f"Using selected dataset: {file_path}")
-                                return file_path, item
-                    
-                    # If not found in metadata, try direct path
-                    possible_paths = [
-                        f"datasets/{selected_dataset}",
-                        selected_dataset,
-                        f"datasets/{os.path.basename(selected_dataset)}"
-                    ]
-                    for path in possible_paths:
-                        if os.path.exists(path) and os.path.isfile(path):
-                            print(f"Using selected dataset (direct path): {path}")
-                            return path, {"filename": os.path.basename(path), "file_path": path}
-            except Exception as e:
-                print(f"Error using selected dataset fallback: {str(e)}")
-        
         # Don't use query words as filenames - return empty and let the system handle it
         # The code generation agent can work without a specific file if needed
         print("Warning: No matching file found. Will proceed without specific file and generate sample data.")
@@ -435,12 +508,10 @@ class FileAccessAgent:
             file_embeddings = model.encode(file_texts)
             
             # Calculate cosine similarity
-            try:
-                from sklearn.metrics.pairwise import cosine_similarity
+            if SKLEARN_AVAILABLE:
                 similarities = cosine_similarity(query_embedding, file_embeddings)[0]
-            except ImportError:
+            else:
                 # Fallback: manual cosine similarity calculation
-                import numpy as np
                 query_vec = np.array(query_embedding[0])
                 similarities = []
                 for file_vec in file_embeddings:
@@ -488,7 +559,6 @@ class FileAccessAgent:
             file_embeddings = embeddings.embed_documents(file_texts)
             
             # Calculate cosine similarity
-            import numpy as np
             query_vec = np.array(query_embedding)
             similarities = []
             for file_vec in file_embeddings:
@@ -751,11 +821,6 @@ class CodeGenerationAgent:
                 "  - OPENAI_API_KEY in .env file\n"
                 "Gemini is preferred. Install with: pip install langchain-google-genai"
             )
-        # print("system_prompt>>>>", self.system_prompt)
-
-    # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
-    # def completion_with_backoff(self, messages):
-    #     return self.model.invoke(messages)
     
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate Python code based on the user query and file information."""
@@ -792,11 +857,8 @@ class CodeGenerationAgent:
         elif file_path:
             print(f"Warning: File path '{file_path}' does not exist or is not a valid file")
             file_info += f"\nWarning: File '{file_path}' not found. Will proceed without file-specific information.\n"
-        # if isinstance(report_text, str):
-        #     file_info += f"\n------------------------\n{report_text}\n------------------------\n"
 
         # Create messages for the model
-        # print("file_info>>>>", file_info)
         
         # Determine file instruction based on whether a file is provided
         file_instruction = ""
@@ -813,7 +875,7 @@ CRITICAL INSTRUCTIONS - DATASET PROVIDED:
 - DO NOT create sample data - use the real dataset provided
 """
         elif filename and os.path.exists(file_path) if file_path else False:
-            file_instruction = f" using the file at '/home/sandboxuser/{filename}'. You MUST use this exact dataset - DO NOT generate fake data."
+            file_instruction = f" using the file at '/tmp/{filename}'. You MUST use this exact dataset - DO NOT generate fake data."
         elif filename:
             file_instruction = f" Note: A file '{filename}' was mentioned but may not be available. If the file exists, use it. Otherwise, generate code that can work with sample data or handle missing files gracefully."
         else:
@@ -856,11 +918,6 @@ Example for "customer age distribution":
             - Remember: The code will be executed in a Jupyter notebook, and plots will be automatically captured in the notebook output
             """)
         ]
-        print("System message>>>>", messages[0].content)
-        print("Human message>>>>", messages[1].content)
-        print("state['messages']>>>>", state['messages'])
-        print("-"*100)
-        # response = self.completion_with_backoff(messages)
         try:
             response = self.model.invoke(
                 state['messages'] + messages
@@ -893,23 +950,6 @@ Example for "customer age distribution":
             else:
                 raise
         content = response.content
-        print("content planning>>>>", content)
-        # messages = [
-        #     SystemMessage(content=self.system_prompt),
-        #     HumanMessage(content=f"""
-        #     User question: {user_query}
-
-        #     File information: {file_info}
-
-        #     Planning you need to follow: {content}
-        #     Generate Python code to answer this question using the file at '/home/sandboxuser/{filename}'.
-        #     """)
-        # ]
-        # response = self.completion_with_backoff(messages)
-        
-        # Extract the Python code from the response
-        # This is a simplified approach - in a real system, you'd want more robust parsing
-        # content = response.content
         
         # Simple code extraction - look for Python code blocks
         code_blocks = re.findall(r'```python(.*?)```', content, re.DOTALL)
@@ -1051,7 +1091,6 @@ class CodeExecutor:
         """
         # Import codibox package - use unified CodeExecutor
         from codibox import CodeExecutor
-        import os
         
         # Use Host backend by default (works on Streamlit Cloud)
         # Only use Docker if explicitly requested via environment variable

@@ -1,7 +1,16 @@
-import pandas as pd
+"""
+Utility functions for CSV analysis and DataFrame description.
+"""
+
+# Standard library imports
 import os
-import numpy as np
 import json
+
+# Third-party imports
+import numpy as np
+import pandas as pd
+
+# System prompts for code generation
 system_prompt0 = """
         You are a Python code generation agent specialized in data analysis.
         Your task is to generate Python code that answers the user's question about their data.
@@ -146,7 +155,8 @@ def analyze_csv(file_path):
             try:
                 df[col] = pd.to_datetime(df[col])
                 date_columns.append(col)
-            except:
+            except (ValueError, TypeError):
+                # Column cannot be converted to datetime, skip it
                 pass
     
     # Get time range if date columns exist
@@ -236,7 +246,7 @@ def analyze_csv(file_path):
             elif col in date_columns:
                 try:
                     formatted_val = val.strftime('%Y-%m-%d')
-                except:
+                except (AttributeError, ValueError, TypeError):
                     formatted_val = str(val)
             else:
                 formatted_val = str(val)
@@ -451,7 +461,7 @@ def generate_detailed_dataframe_description(df: pd.DataFrame) -> str:
                     try:
                         pd.to_datetime(val)
                         val_type = "date_string"
-                    except:
+                    except (ValueError, TypeError):
                         val_type = "string"
                 val_str = f'"{val}"'
             elif isinstance(val, (pd.Timestamp, np.datetime64)):
@@ -495,7 +505,7 @@ def generate_detailed_dataframe_description(df: pd.DataFrame) -> str:
                     try:
                         pd.to_datetime(val)
                         val_type = "date_string"
-                    except:
+                    except (ValueError, TypeError):
                         val_type = "string"
                 val_str = f'"{val}"'
             elif isinstance(val, (pd.Timestamp, np.datetime64)):
